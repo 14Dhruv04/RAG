@@ -8,6 +8,7 @@ from tools.bm25_tool import create_bm25_tool
 from tools.semantic_tool import create_semantic_tool
 
 from agents.retriever_agent import RetrieverAgent
+from agents.main_agent import MainAgent
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 load_dotenv()
@@ -40,30 +41,26 @@ def main():
         print(f"Tool Name: {tool.name}")
         print()
 
-    query = "What is the difference between a class and a struct in C++?"
-
-    print(f"\nQuery: {query}")
-
-    print("\nBM25:")
-    print(bm25_tool.invoke(query))
-
-    print("\nSemantic:")
-    print(semantic_tool.invoke(query))
-
     retriever_agent = RetrieverAgent(
         model = model,
         tools = retriever_tools
     )
 
-    query = "How does authentication work?"
+    main_agent = MainAgent(
+        model = model
+    )
 
-    result = retriever_agent.retrieve(query)
+    query = str(input("Enter query: "))
 
-    print("\nSelected retriever:")
-    print(result["retriever"])
+    retrieval_result = retriever_agent.retrieve(query)
 
-    print("\nRetrieved context:")
-    print(result["context"])
+    answer = main_agent.response(
+        query = query,
+        context = retrieval_result["context"]
+    )
+
+    print("\nAnswer:")
+    print(answer)
 
 if __name__ == "__main__":
     main()
