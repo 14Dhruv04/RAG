@@ -32,7 +32,7 @@ class SemanticRetriever:
 
 
     def retrieve(self, query, top_k=5):
-        results = self.vector_store.similarity_search_by_vector(
+        results = self.vector_store.similarity_search_with_score(
             query,
             k=top_k
         )
@@ -41,7 +41,7 @@ class SemanticRetriever:
             {
                 "content": doc.page_content,
                 "score": score,
-                "doc_id": doc.metadata["doc_id"],
+                "index": doc.metadata["index"],
                 "retriever": "semantic"
             }
             for doc, score in results

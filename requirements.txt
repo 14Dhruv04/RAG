@@ -1,2 +1,23 @@
-pymupdf
-langchain-community
+# Core environment
+python-dotenv>=1.0,<2.0
+
+# LangChain
+langchain>=1.4,<2.0
+langchain-core>=1.6,<2.0
+langchain-community>=0.4,<0.5
+
+# Retrieval / vector store
+langchain-chroma>=1.1,<2.0
+chromadb>=1.1,<2.0
+
+# Hugging Face embeddings
+langchain-huggingface>=1.2,<2.0
+sentence-transformers>=3.0,<6.0
+
+# Gemini
+langchain-google-genai>=4.4,<5.0
+
+# Document loaders
+pypdf>=5.0,<7.0
+unstructured>=0.18,<1.0
+openpyxl>=3.1,<4.0

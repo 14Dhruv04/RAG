@@ -56,12 +56,12 @@ class BM25Retriever:
 
             idf = self.inverse_document_frequency(term)
 
-            for doc_id, doc_freq in self.postings[term]:
-                tf_component = (doc_freq * (self.k1 + 1)) / (doc_freq + self.length_norm[doc_id])
+            for index, doc_freq in self.postings[term]:
+                tf_component = (doc_freq * (self.k1 + 1)) / (doc_freq + self.length_norm[index])
 
                 score = idf * tf_component
 
-                scores[doc_id] = scores.get(doc_id, 0.0) + score
+                scores[index] = scores.get(index, 0.0) + score
 
         ranked_docs = sorted(
             scores.items(),
@@ -70,6 +70,6 @@ class BM25Retriever:
         )
 
         return [
-            self.documents[doc_id]
-            for doc_id, _ in ranked_docs[:top_k]
+            self.documents[index]
+            for index, _ in ranked_docs[:top_k]
         ]
