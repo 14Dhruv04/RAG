@@ -48,6 +48,9 @@ class RetrieverAgent:
         )
 
         messages = result["messages"]
+        # for message in result["messages"]:
+        #     print("\nTYPE:", type(message).__name__)
+        #     print(message)
 
         selected_tool = None
 
@@ -55,6 +58,7 @@ class RetrieverAgent:
             if(isinstance(message, AIMessage)):
                 if message.tool_calls:
                     selected_tool = message.tool_calls[0]["name"]
+                    print("\nSELECTED TOOL: ", selected_tool)
                     break
 
         tool_results = [

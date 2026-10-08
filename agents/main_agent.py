@@ -44,5 +44,13 @@ class MainAgent:
             }
         )
 
-        return result["messages"][-1].content
+        response = result["messages"][-1].content
 
+        if isinstance(response, list):
+            return "\n".join(
+                block["text"]
+                for block in response
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+
+        return response

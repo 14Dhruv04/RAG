@@ -8,7 +8,7 @@ class SemanticRetriever:
     def __init__(self, documents, persist_directory = "./chroma_db", collection_name = "semantic_documents", embedding_model = "sentence-transformers/all-MiniLM-L6-v2"):
         self.documents = documents
 
-        self.embeddings = HuggingFaceEmbeddings(model_name=embedding_model, model_kwargs={"device": "cpu"}, encode_kwargs={"normalize_embeddings": True})
+        self.embeddings = HuggingFaceEmbeddings(model_name=embedding_model, model_kwargs={"device": "cpu"}, encode_kwargs={"batch_size": 64, "normalize_embeddings": True}, show_progress = True)
 
         self.langchain_documents = [Document(page_content = doc["content"], metadata = {"index": index}) for index, doc in enumerate(documents)]
 
