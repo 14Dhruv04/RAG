@@ -22,7 +22,6 @@ load_dotenv(BASE_DIR / ".env")
 
 st.set_page_config(
     page_title="Document RAG Chatbot",
-    page_icon="💬",
     layout="wide",
 )
 
@@ -62,11 +61,8 @@ def get_semantic_device() -> str:
                 return "cuda"
         except Exception:
             pass
-        # Never crash the application just because CUDA was requested but is
-        # unavailable. Fall back to CPU.
         return "cpu"
 
-    # auto
     try:
         import torch
 
@@ -115,9 +111,7 @@ def load_documents(data_dir: str):
 
 
 @st.cache_data(show_spinner=False)
-def build_semantic_documents(
-    documents: list[dict[str, Any]], csv_rows_per_chunk: int = 75
-):
+def build_semantic_documents(documents: list[dict[str, Any]], csv_rows_per_chunk: int = 75):
     """
     Keep the full corpus for BM25, but reduce the semantic corpus size by
     grouping CSV rows. This avoids generating one embedding per CSV row.
@@ -182,87 +176,6 @@ def semantic_index_id(semantic_documents: list[dict[str, Any]]) -> str:
 
     return digest.hexdigest()[:16]
 
-
-# -----------------------------------------------------------------------------
-# CPU/CUDA-safe semantic retriever
-# -----------------------------------------------------------------------------
-
-class SafeSemanticRetriever:
-    """Semantic retriever with explicit CPU/CUDA device selection.
-
-    This class mirrors the interface used by create_semantic_tool() and avoids
-    failures such as: "Torch not compiled with CUDA enabled".
-    """
-
-    def __init__(
-        self,
-        documents,
-        persist_directory="./chroma_db",
-        collection_name="semantic_documents",
-        embedding_model="sentence-transformers/all-MiniLM-L6-v2",
-        device="cpu",
-    ):
-        from langchain_chroma import Chroma
-        from langchain_core.documents import Document
-        from langchain_huggingface import HuggingFaceEmbeddings
-
-        self.documents = documents
-
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=embedding_model,
-            model_kwargs={"device": device},
-            encode_kwargs={
-                "batch_size": 64,
-                "normalize_embeddings": True,
-            },
-            show_progress=True,
-        )
-
-        self.langchain_documents = [
-            Document(
-                page_content=doc["content"],
-                metadata={
-                    "index": index,
-                    "source": doc.get("source", ""),
-                    "page_number": str(doc.get("page_number", "")),
-                },
-            )
-            for index, doc in enumerate(documents)
-        ]
-
-        persist_path = Path(persist_directory)
-        persist_path.mkdir(parents=True, exist_ok=True)
-
-        self.vector_store = Chroma(
-            persist_directory=str(persist_path),
-            embedding_function=self.embeddings,
-            collection_name=collection_name,
-        )
-
-        collection_data = self.vector_store.get()
-        existing_ids = collection_data.get("ids") or []
-
-        # Only build embeddings when this fingerprinted collection is empty.
-        if not existing_ids:
-            self.vector_store.add_documents(
-                documents=self.langchain_documents,
-                ids=[str(i) for i in range(len(self.langchain_documents))],
-            )
-
-    def retrieve(self, query, top_k=5):
-        results = self.vector_store.similarity_search_with_score(query, k=top_k)
-
-        return [
-            {
-                "content": doc.page_content,
-                "score": score,
-                "index": doc.metadata.get("index"),
-                "retriever": "semantic",
-            }
-            for doc, score in results
-        ]
-
-
 # -----------------------------------------------------------------------------
 # RAG initialization
 # -----------------------------------------------------------------------------
@@ -292,9 +205,7 @@ def initialize_rag(
     index_id = semantic_index_id(semantic_documents)
     collection_name = f"semantic_{index_id}"
 
-    # Use our safe retriever. This works with both CPU-only and CUDA-enabled
-    # PyTorch installations.
-    semantic_retriever = SafeSemanticRetriever(
+    semantic_retriever = SemanticRetriever(
         semantic_documents,
         persist_directory=chroma_dir,
         collection_name=collection_name,
@@ -314,7 +225,7 @@ def initialize_rag(
         tools=[bm25_tool, semantic_tool],
     )
 
-    main_agent = MainAgent(model=model)
+    main_agent = MainAgent(model=model, tools=[bm25_tool, semantic_tool])
 
     return {
         "documents": documents,
@@ -324,65 +235,6 @@ def initialize_rag(
         "semantic_collection": collection_name,
         "semantic_device": semantic_device,
     }
-
-
-# -----------------------------------------------------------------------------
-# UI helpers
-# -----------------------------------------------------------------------------
-
-def render_sidebar(rag, data_dir: Path, chroma_dir: Path) -> None:
-    with st.sidebar:
-        st.header("Configuration")
-        st.caption("BM25 for exact lookups + semantic retrieval for meaning-based queries.")
-
-        st.metric("Original document chunks", len(rag["documents"]))
-        st.metric("Semantic chunks", len(rag["semantic_documents"]))
-
-        st.divider()
-        st.subheader("Semantic model")
-        st.write(f"Device: **{rag['semantic_device']}**")
-
-        if rag["semantic_device"] == "cpu":
-            st.caption(
-                "CPU mode is active because your installed PyTorch does not provide CUDA."
-            )
-
-        st.divider()
-        st.subheader("Data")
-        st.caption(str(data_dir))
-
-        st.divider()
-        st.subheader("Retrieval")
-        st.write("**BM25** — exact terms, names, identifiers, table values")
-        st.write("**Semantic** — conceptual and paraphrased questions")
-
-        st.divider()
-        st.subheader("Index")
-        st.caption(f"Chroma: {chroma_dir}")
-        st.caption(f"Collection: `{rag['semantic_collection']}`")
-
-        st.divider()
-        if st.button("Reload document index", use_container_width=True):
-            load_documents.clear()
-            build_semantic_documents.clear()
-            semantic_index_id.clear()
-            initialize_rag.clear()
-            st.session_state.messages = []
-            st.rerun()
-
-        if st.button("Rebuild semantic index", use_container_width=True):
-            if chroma_dir.exists():
-                shutil.rmtree(chroma_dir)
-            load_documents.clear()
-            build_semantic_documents.clear()
-            semantic_index_id.clear()
-            initialize_rag.clear()
-            st.session_state.messages = []
-            st.rerun()
-
-        if st.button("Clear conversation", use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
 
 
 def render_message(message: dict[str, Any]) -> None:
@@ -402,7 +254,7 @@ def render_message(message: dict[str, Any]) -> None:
 # -----------------------------------------------------------------------------
 
 def main() -> None:
-    st.title("💬 Document RAG Chatbot")
+    st.title("Document RAG Chatbot")
     st.caption("Ask questions about the documents available in the data directory.")
 
     data_dir = get_data_dir()
@@ -427,8 +279,6 @@ def main() -> None:
         )
         st.stop()
 
-    render_sidebar(rag, data_dir, chroma_dir)
-
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
@@ -447,34 +297,82 @@ def main() -> None:
     with st.chat_message("user"):
         st.markdown(query)
 
+        
     with st.chat_message("assistant"):
+        answer_placeholder = st.empty()
+        
+        trace_events = []
+        trace_id = len(st.session_state.messages)
+
+        with st.expander("Agent execution trace", expanded=True):
+            trace_container = st.container()
+
+
+            def update_trace(event):
+                """Render each event once as it arrives."""
+                trace_events.append(event)
+
+                index = len(trace_events)
+                event_type = event["type"]
+
+                with trace_container:
+                    if event_type == "status":
+                        st.caption(event["message"])
+
+                    elif event_type == "tool_call":
+                        st.markdown(
+                            f"**{index}. Tool call: `{event['name']}`**"
+                        )
+
+                        args = event.get("args", {})
+                        if args:
+                            st.json(args)
+
+                    elif event_type == "tool_result":
+                        tool_name = event["name"]
+                        retrieved_content = event.get("content", "")
+
+                        st.markdown(
+                            f"**{index}. Tool completed: `{tool_name}`**"
+                        )
+
+                        st.caption(
+                            f"Retrieved content: "
+                            f"{event.get('char_count', len(retrieved_content)):,} "
+                            "characters"
+                        )
+
+                        st.text_area(
+                            label=f"Retrieved content from {tool_name}",
+                            value=retrieved_content or "No text content returned.",
+                            height=250,
+                            key=f"retrieved_content_{trace_id}_{index}",
+                            disabled=True,
+                        )
+
         try:
-            with st.spinner("Retrieving relevant information and generating an answer..."):
-                retrieval_result = rag["retriever_agent"].retrieve(query)
-                answer = rag["main_agent"].response(
-                    query=query,
-                    context=retrieval_result["context"],
-                )
+            answer = rag["main_agent"].response(
+                query=query,
+                on_event=update_trace,
+            )
 
-            st.markdown(answer)
-            st.caption(f"Retriever: {retrieval_result['retriever']}")
-
-            with st.expander("Retrieved context"):
-                st.text(retrieval_result["context"])
+            answer_placeholder.markdown(answer)
 
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": answer,
-                "retriever": retrieval_result["retriever"],
-                "context": retrieval_result["context"],
+                "trace": trace_events.copy(),
             })
 
         except Exception as exc:
             error_message = f"I could not process that query: {exc}"
-            st.error(error_message)
+
+            answer_placeholder.error(error_message)
+
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": error_message,
+                "trace": trace_events.copy(),
             })
 
 
