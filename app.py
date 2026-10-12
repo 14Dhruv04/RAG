@@ -220,33 +220,71 @@ def initialize_rag(
         google_api_key=api_key,
     )
 
-    retriever_agent = RetrieverAgent(
-        model=model,
-        tools=[bm25_tool, semantic_tool],
-    )
-
     main_agent = MainAgent(model=model, tools=[bm25_tool, semantic_tool])
 
     return {
         "documents": documents,
         "semantic_documents": semantic_documents,
-        "retriever_agent": retriever_agent,
         "main_agent": main_agent,
         "semantic_collection": collection_name,
         "semantic_device": semantic_device,
     }
 
 
-def render_message(message: dict[str, Any]) -> None:
+
+def render_message(
+    message: dict[str, Any],
+    message_index: int = 0,
+) -> None:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-        if message["role"] == "assistant" and message.get("retriever"):
-            st.caption(f"Retriever: {message['retriever']}")
-            context = message.get("context")
-            if context:
-                with st.expander("Retrieved context"):
-                    st.text(context)
+        trace = message.get("trace", [])
+
+        if message["role"] != "assistant" or not trace:
+            return
+
+        trace_id = message.get("trace_id", message_index)
+
+        with st.expander("Agent execution trace", expanded=False):
+            for index, event in enumerate(trace, start=1):
+                event_type = event["type"]
+
+                if event_type == "status":
+                    st.caption(event["message"])
+
+                elif event_type == "tool_call":
+                    st.markdown(
+                        f"**{index}. Tool call: `{event['name']}`**"
+                    )
+
+                    if event.get("args"):
+                        st.json(event["args"])
+
+                elif event_type == "tool_result":
+                    tool_name = event["name"]
+                    content = event.get("content", "")
+
+                    st.markdown(
+                        f"**{index}. Tool completed: `{tool_name}`**"
+                    )
+
+                    st.caption(
+                        f"Retrieved content: "
+                        f"{event.get('char_count', len(content)):,} "
+                        "characters"
+                    )
+
+                    st.text_area(
+                        label=f"Retrieved content from {tool_name}",
+                        value=content or "No text content returned.",
+                        height=250,
+                        key=(
+                            f"history_retrieved_content_"
+                            f"{trace_id}_{index}"
+                        ),
+                        disabled=True,
+                    )
 
 
 # -----------------------------------------------------------------------------
@@ -282,8 +320,8 @@ def main() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    for message in st.session_state.messages:
-        render_message(message)
+    for message_index, message in enumerate(st.session_state.messages):
+        render_message(message, message_index)
 
     query = st.chat_input("Ask a question about your documents...")
     if not query:
@@ -306,7 +344,6 @@ def main() -> None:
 
         with st.expander("Agent execution trace", expanded=True):
             trace_container = st.container()
-
 
             def update_trace(event):
                 """Render each event once as it arrives."""
@@ -362,6 +399,7 @@ def main() -> None:
                 "role": "assistant",
                 "content": answer,
                 "trace": trace_events.copy(),
+                "trace_id" : trace_id,
             })
 
         except Exception as exc:
@@ -373,6 +411,7 @@ def main() -> None:
                 "role": "assistant",
                 "content": error_message,
                 "trace": trace_events.copy(),
+                "trace_id" : trace_id,
             })
 
 
