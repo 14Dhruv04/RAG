@@ -220,7 +220,10 @@ def initialize_rag(
         google_api_key=api_key,
     )
 
-    main_agent = MainAgent(model=model, tools=[bm25_tool, semantic_tool])
+    main_agent = MainAgent(
+        model=model, 
+        tools=[bm25_tool, semantic_tool]
+    )
 
     return {
         "documents": documents,
@@ -231,11 +234,7 @@ def initialize_rag(
     }
 
 
-
-def render_message(
-    message: dict[str, Any],
-    message_index: int = 0,
-) -> None:
+def render_message(message: dict[str, Any], message_index: int = 0) -> None:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
@@ -285,7 +284,6 @@ def render_message(
                         ),
                         disabled=True,
                     )
-
 
 # -----------------------------------------------------------------------------
 # Main application
@@ -413,7 +411,6 @@ def main() -> None:
                 "trace": trace_events.copy(),
                 "trace_id" : trace_id,
             })
-
 
 if __name__ == "__main__":
     main()
