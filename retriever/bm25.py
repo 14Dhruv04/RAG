@@ -44,7 +44,7 @@ class BM25Retriever:
 
         return math.log(1 + (document_count - term_document_count + 0.5) / (term_document_count + 0.5))
 
-    def retrieve(self, query, top_k=5):
+    def retrieve(self, query, top_k=3):
         query_terms = self.tokenize(query)
         scores = {}
 

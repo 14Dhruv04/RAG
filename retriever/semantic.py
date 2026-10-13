@@ -48,7 +48,7 @@ class SemanticRetriever:
                 ids=[str(i) for i in range(len(self.langchain_documents))],
             )
 
-    def retrieve(self, query, top_k=5):
+    def retrieve(self, query, top_k=3):
         results = self.vector_store.similarity_search_with_score(query, k=top_k)
 
         return [
