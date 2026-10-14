@@ -15,6 +15,7 @@ from tools.semantic_tool import create_semantic_tool
 from agents.retriever_agent import RetrieverAgent
 from agents.main_agent import MainAgent
 from langchain_google_genai import ChatGoogleGenerativeAI
+from guards.jailbreak_detection import document_sanitizer, input_check
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -91,10 +92,13 @@ def load_documents(data_dir: str):
 
         if suffix == ".csv":
             parsed = CSVparser(str(file_path))
+            parsed = document_sanitizer(parsed)
         elif suffix in {".xlsx", ".xls"}:
             parsed = Excelparser(str(file_path))
+            parsed = document_sanitizer(parsed)
         elif suffix == ".pdf":
             parsed = PDFparser(str(file_path))
+            parsed = document_sanitizer(parsed)
         else:
             continue
 
@@ -323,6 +327,27 @@ def main() -> None:
 
     query = st.chat_input("Ask a question about your documents...")
     if not query:
+        return
+
+    if not input_check(query):
+        invalid_msg = "Invalid Request"
+
+        st.session_state.messages.append({
+            "role": "user",
+            "content": query,
+        })
+
+        with st.chat_message("user"):
+            st.markdown(query)
+
+        with st.chat_message("assistant"):
+            st.markdown(invalid_msg)
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": invalid_msg,
+        })
+
         return
 
     st.session_state.messages.append({
