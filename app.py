@@ -15,17 +15,25 @@ from tools.semantic_tool import create_semantic_tool
 from agents.retriever_agent import RetrieverAgent
 from agents.main_agent import MainAgent
 from langchain_google_genai import ChatGoogleGenerativeAI
+
 from guards.jailbreak_detection import document_sanitizer, input_check
+from guards.llama import LlamaGuard
 
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
+
+@st.cache_resource
+def get_llama_guard():
+    return LlamaGuard()
+
+llama_guard = get_llama_guard()
+
 st.set_page_config(
     page_title="Document RAG Chatbot",
     layout="wide",
 )
-
 
 # -----------------------------------------------------------------------------
 # Configuration helpers
@@ -92,13 +100,13 @@ def load_documents(data_dir: str):
 
         if suffix == ".csv":
             parsed = CSVparser(str(file_path))
-            parsed = document_sanitizer(parsed)
+            parsed = document_sanitizer(documents=parsed, llama_guard=llama_guard)
         elif suffix in {".xlsx", ".xls"}:
             parsed = Excelparser(str(file_path))
-            parsed = document_sanitizer(parsed)
+            parsed = document_sanitizer(documents=parsed, llama_guard=llama_guard)
         elif suffix == ".pdf":
             parsed = PDFparser(str(file_path))
-            parsed = document_sanitizer(parsed)
+            parsed = document_sanitizer(documents=parsed, llama_guard=llama_guard)
         else:
             continue
 
@@ -329,7 +337,7 @@ def main() -> None:
     if not query:
         return
 
-    if not input_check(query):
+    if not input_check(query=query, llama_guard=llama_guard):
         invalid_msg = "Invalid Request"
 
         st.session_state.messages.append({
