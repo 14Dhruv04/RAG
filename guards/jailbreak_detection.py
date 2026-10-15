@@ -1,11 +1,9 @@
 import re
 from transformers import pipeline
-from guards.llama import LlamaGuard
+from guards.llama import LlamaGuard, THRESHOLD
 from dotenv import load_dotenv
 
 load_dotenv()
-
-THRESHOLD = 0.8
 
 def paragraph_to_sentences(paragraph: str) -> list[str]:
     # Remove null characters and replace newlines/tabs with spaces

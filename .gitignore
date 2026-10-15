@@ -12,3 +12,7 @@ chromadb/
 code.zip
 
 llama-guard/
+
+data/
+
+sanitized_cache/
