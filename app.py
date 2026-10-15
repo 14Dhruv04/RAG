@@ -19,16 +19,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from guards.jailbreak_detection import document_sanitizer, input_check
 from guards.llama import LlamaGuard
 
-
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
-
-
-@st.cache_resource
-def get_llama_guard():
-    return LlamaGuard()
-
-llama_guard = get_llama_guard()
 
 st.set_page_config(
     page_title="Document RAG Chatbot",
@@ -38,6 +30,11 @@ st.set_page_config(
 # -----------------------------------------------------------------------------
 # Configuration helpers
 # -----------------------------------------------------------------------------
+@st.cache_resource
+def get_llama_guard():
+    return LlamaGuard()
+
+llama_guard = get_llama_guard()
 
 def get_data_dir() -> Path:
     configured_dir = os.getenv("DATA_DIR")
