@@ -82,7 +82,7 @@ def get_semantic_device() -> str:
 # Document loading
 # -----------------------------------------------------------------------------
 
-SANITIZER_VERSION = "1"  # bump if you change the splitting/filtering logic
+SANITIZER_VERSION = "1"
 
 PARSERS = {
     ".csv": CSVparser,
@@ -97,6 +97,7 @@ def get_sanitize_cache_dir() -> Path:
     if not path.is_absolute():
         path = BASE_DIR / path
     path.mkdir(parents=True, exist_ok=True)
+
     return path
 
 
@@ -106,46 +107,117 @@ def sanitize_cache_key(file_path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             digest.update(chunk)
     digest.update(b"\0")
-    digest.update(
-        f"{MODEL_ID}|{THRESHOLD}|{SANITIZER_VERSION}".encode("utf-8")
-    )
+    digest.update(f"{MODEL_ID}|{THRESHOLD}|{SANITIZER_VERSION}".encode("utf-8"))
     return digest.hexdigest()
 
 
-def load_sanitized_file(file_path: Path, parser) -> list[dict[str, Any]]:
-    cache_file = get_sanitize_cache_dir() / f"{sanitize_cache_key(file_path)}.json"
+def load_sanitized_file_uncached(file_path: Path, parser) -> list[dict[str, Any]]:
+    cache_dir = get_sanitize_cache_dir()
+    key = sanitize_cache_key(file_path)
+    cache_file = cache_dir / f"{key}.json"
 
-    if cache_file.exists():
+    print(f"[CACHE] Uploaded file: {file_path.resolve()}")
+    print(f"[CACHE] Cache directory: {cache_dir.resolve()}")
+    print(f"[CACHE] Cache key: {key}")
+    print(f"[CACHE] Cache file exists: {cache_file.is_file()}")
+
+    if cache_file.is_file():
         try:
-            return json.loads(cache_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass 
+            sanitized = json.loads(
+                cache_file.read_text(encoding="utf-8")
+            )
+            print("[CACHE] HIT - using cached sanitized document")
+            return sanitized
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"[CACHE] Read failed - rebuilding cache: {exc}")
+
+    print("[CACHE] MISS - parsing and sanitizing document")
 
     parsed = parser(str(file_path))
-    sanitized = document_sanitizer(documents=parsed, llama_guard=llama_guard)
+    sanitized = document_sanitizer(
+        documents=parsed,
+        llama_guard=llama_guard,
+    )
 
     tmp_file = cache_file.with_suffix(".tmp")
-    tmp_file.write_text(json.dumps(sanitized, ensure_ascii=False), encoding="utf-8")
-    tmp_file.replace(cache_file)  # atomic, so a crash can't leave a half-written cache
+    tmp_file.write_text(
+        json.dumps(sanitized, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    tmp_file.replace(cache_file)
 
-    print("sanitization completed!!")
+    print("[CACHE] Sanitized result saved")
     return sanitized
+
+@st.cache_data(show_spinner=False)
+def load_sanitized_file_memory(
+    file_path_str: str,
+    file_size: int,
+    mtime_ns: int,
+    suffix: str,
+    model_id: str,
+    threshold: str,
+    sanitizer_version: str,
+) -> list[dict[str, Any]]:
+    
+    file_path = Path(file_path_str)
+    parser = PARSERS[suffix]
+
+    return load_sanitized_file_uncached(file_path, parser)
+
+
+def load_sanitized_file(file_path: Path) -> list[dict[str, Any]]:
+    stat = file_path.stat()
+
+    return load_sanitized_file_memory(
+        str(file_path.resolve()),
+        stat.st_size,
+        stat.st_mtime_ns,
+        file_path.suffix.lower(),
+        str(MODEL_ID),
+        str(THRESHOLD),
+        SANITIZER_VERSION,
+    )
+
+def get_directory_signature(data_dir: str) -> tuple:
+    data_path = Path(data_dir)
+    files = []
+
+    for path in sorted(data_path.iterdir()):
+        if path.is_file() and path.suffix.lower() in PARSERS:
+            stat = path.stat()
+            files.append(
+                (path.name, stat.st_size, stat.st_mtime_ns)
+            )
+
+    return (
+        tuple(files),
+        str(MODEL_ID),
+        str(THRESHOLD),
+        SANITIZER_VERSION,
+    )
 
 
 @st.cache_data(show_spinner=False)
-def load_documents(data_dir: str):
+def load_documents(
+    data_dir: str,
+    directory_signature: tuple,
+) -> list[dict[str, Any]]:
     documents: list[dict[str, Any]] = []
     data_path = Path(data_dir)
 
     if not data_path.exists():
-        raise FileNotFoundError(f"Data directory does not exist: {data_path}")
+        raise FileNotFoundError(
+            f"Data directory does not exist: {data_path}"
+        )
 
     for file_path in sorted(data_path.iterdir()):
         parser = PARSERS.get(file_path.suffix.lower())
+
         if not file_path.is_file() or parser is None:
             continue
 
-        parsed = load_sanitized_file(file_path, parser)
+        parsed = load_sanitized_file(file_path)
 
         for doc in parsed:
             enriched = dict(doc)
@@ -154,7 +226,9 @@ def load_documents(data_dir: str):
             documents.append(enriched)
 
     if not documents:
-        raise ValueError(f"No supported documents found in {data_path}")
+        raise ValueError(
+            f"No supported documents found in {data_path}"
+        )
 
     return documents
 
@@ -243,7 +317,8 @@ def initialize_rag(
             "GEMINI_API_KEY is not set. Add it to your environment or .env file."
         )
 
-    documents = load_documents(data_dir)
+    signature = get_directory_signature(data_dir)
+    documents = load_documents(data_dir, signature)
     semantic_documents = build_semantic_documents(
         documents,
         csv_rows_per_chunk=csv_rows_per_chunk,
@@ -293,7 +368,6 @@ def save_uploaded_files(
     skipped: list[str] = []
 
     for uploaded_file in uploaded_files:
-        # Prevent directory components in client-supplied filenames.
         filename = uploaded_file.name.replace("\\", "/").rsplit("/", 1)[-1]
 
         if not filename:
@@ -386,7 +460,6 @@ def render_upload_controls(data_dir: Path) -> None:
             return
 
         if saved:
-            # Preserve notices across the rerun.
             st.session_state["upload_notice"] = (
                 f"Added {len(saved)} document(s): "
                 + ", ".join(saved)
@@ -398,7 +471,6 @@ def render_upload_controls(data_dir: Path) -> None:
 
             clear_rag_caches()
 
-            # Restart the script so initialize_rag loads the new corpus.
             st.rerun()
 
         if skipped:
