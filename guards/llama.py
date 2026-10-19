@@ -76,11 +76,3 @@ class LlamaGuard:
     def check(self, text: str) -> dict:
         return self.check_batch([text])[0]
 
-    def is_safe(self, text: str, threshold=THRESHOLD) -> bool:
-        result = self.check(text)
-
-        return (
-            result["label"] == "BENIGN"
-            and result["confidence"] >= threshold
-        )
-
