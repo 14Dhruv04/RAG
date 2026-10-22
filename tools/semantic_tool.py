@@ -1,6 +1,7 @@
 from langchain_core.tools import tool
+from guards.jailbreak_detection import document_sanitizer
 
-def create_semantic_tool(semantic_retriever):
+def create_semantic_tool(semantic_retriever, llama_guard):
 
     @tool
     def semantic_search(query: str) -> list:
@@ -9,7 +10,10 @@ def create_semantic_tool(semantic_retriever):
         Use this for conceptual questions, paraphrases, and queries where
         understanding the meaning is more important than exact keywords.
         """
+
+        context = semantic_retriever.retrieve(query, top_k=5)
+        context = document_sanitizer(documents=context, llama_guard=llama_guard)
         
-        return semantic_retriever.retrieve(query, top_k=5)
+        return context
 
     return semantic_search

@@ -16,3 +16,5 @@ llama-guard/
 data/
 
 sanitized_cache/
+
+test.py

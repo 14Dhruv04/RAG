@@ -1,6 +1,6 @@
 import re
 from transformers import pipeline
-from llama import LlamaGuard, THRESHOLD
+from guards.llama import LlamaGuard, THRESHOLD
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -97,7 +97,7 @@ def document_sanitizer(
 
             if is_jailbreak:
                 print(
-                    f"[Llama Guard] REMOVED | "
+                    f"[Llama Guard Document Check] REMOVED | "
                     f"label={label} | "
                     f"confidence={confidence:.4f} | "
                     f"sentence={sentence!r}"

@@ -82,102 +82,12 @@ def get_semantic_device() -> str:
 # Document loading
 # -----------------------------------------------------------------------------
 
-SANITIZER_VERSION = "1"
-
 PARSERS = {
     ".csv": CSVparser,
     ".xlsx": Excelparser,
     ".xls": Excelparser,
     ".pdf": PDFparser,
 }
-
-
-def get_sanitize_cache_dir() -> Path:
-    path = Path(os.getenv("SANITIZE_CACHE_DIR", "sanitized_cache"))
-    if not path.is_absolute():
-        path = BASE_DIR / path
-    path.mkdir(parents=True, exist_ok=True)
-
-    return path
-
-
-def sanitize_cache_key(file_path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            digest.update(chunk)
-    digest.update(b"\0")
-    digest.update(f"{MODEL_ID}|{THRESHOLD}|{SANITIZER_VERSION}".encode("utf-8"))
-    return digest.hexdigest()
-
-
-def load_sanitized_file_uncached(file_path: Path, parser) -> list[dict[str, Any]]:
-    cache_dir = get_sanitize_cache_dir()
-    key = sanitize_cache_key(file_path)
-    cache_file = cache_dir / f"{key}.json"
-
-    print(f"[CACHE] Uploaded file: {file_path.resolve()}")
-    print(f"[CACHE] Cache directory: {cache_dir.resolve()}")
-    print(f"[CACHE] Cache key: {key}")
-    print(f"[CACHE] Cache file exists: {cache_file.is_file()}")
-
-    if cache_file.is_file():
-        try:
-            sanitized = json.loads(
-                cache_file.read_text(encoding="utf-8")
-            )
-            print("[CACHE] HIT - using cached sanitized document")
-            return sanitized
-        except (json.JSONDecodeError, OSError) as exc:
-            print(f"[CACHE] Read failed - rebuilding cache: {exc}")
-
-    print("[CACHE] MISS - parsing and sanitizing document")
-
-    parsed = parser(str(file_path))
-    sanitized = document_sanitizer(
-        documents=parsed,
-        llama_guard=llama_guard,
-    )
-
-    tmp_file = cache_file.with_suffix(".tmp")
-    tmp_file.write_text(
-        json.dumps(sanitized, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    tmp_file.replace(cache_file)
-
-    print("[CACHE] Sanitized result saved")
-    return sanitized
-
-@st.cache_data(show_spinner=False)
-def load_sanitized_file_memory(
-    file_path_str: str,
-    file_size: int,
-    mtime_ns: int,
-    suffix: str,
-    model_id: str,
-    threshold: str,
-    sanitizer_version: str,
-) -> list[dict[str, Any]]:
-    
-    file_path = Path(file_path_str)
-    parser = PARSERS[suffix]
-
-    return load_sanitized_file_uncached(file_path, parser)
-
-
-def load_sanitized_file(file_path: Path) -> list[dict[str, Any]]:
-    stat = file_path.stat()
-
-    return load_sanitized_file_memory(
-        str(file_path.resolve()),
-        stat.st_size,
-        stat.st_mtime_ns,
-        file_path.suffix.lower(),
-        str(MODEL_ID),
-        str(THRESHOLD),
-        SANITIZER_VERSION,
-    )
 
 def get_directory_signature(data_dir: str) -> tuple:
     data_path = Path(data_dir)
@@ -190,13 +100,7 @@ def get_directory_signature(data_dir: str) -> tuple:
                 (path.name, stat.st_size, stat.st_mtime_ns)
             )
 
-    return (
-        tuple(files),
-        str(MODEL_ID),
-        str(THRESHOLD),
-        SANITIZER_VERSION,
-    )
-
+    return (tuple(files))
 
 @st.cache_data(show_spinner=False)
 def load_documents(
@@ -212,12 +116,15 @@ def load_documents(
         )
 
     for file_path in sorted(data_path.iterdir()):
-        parser = PARSERS.get(file_path.suffix.lower())
-
-        if not file_path.is_file() or parser is None:
+        if not file_path.is_file():
             continue
 
-        parsed = load_sanitized_file(file_path)
+        parser = PARSERS.get(file_path.suffix.lower())
+        if parser is None:
+            continue
+
+        # Parse the document without sanitization.
+        parsed = parser(str(file_path))
 
         for doc in parsed:
             enriched = dict(doc)
@@ -231,7 +138,6 @@ def load_documents(
         )
 
     return documents
-
 
 @st.cache_data(show_spinner=False)
 def build_semantic_documents(documents: list[dict[str, Any]], csv_rows_per_chunk: int = 75):
@@ -336,8 +242,8 @@ def initialize_rag(
         device=semantic_device,
     )
 
-    bm25_tool = create_bm25_tool(bm25_retriever)
-    semantic_tool = create_semantic_tool(semantic_retriever)
+    bm25_tool = create_bm25_tool(bm25_retriever, llama_guard=llama_guard)
+    semantic_tool = create_semantic_tool(semantic_retriever, llama_guard=llama_guard)
 
     model = ChatGoogleGenerativeAI(
         model=model_name,
