@@ -1,6 +1,6 @@
 import re
 from transformers import pipeline
-from guards.llama import LlamaGuard, THRESHOLD
+from llama import LlamaGuard, THRESHOLD
 from dotenv import load_dotenv
 
 load_dotenv()

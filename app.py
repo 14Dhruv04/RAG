@@ -17,7 +17,7 @@ from agents.retriever_agent import RetrieverAgent
 from agents.main_agent import MainAgent
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from guards.jailbreak_detection import document_sanitizer, input_check
+from guards.jailbreak_detection import input_check
 from guards.llama import LlamaGuard, MODEL_ID, THRESHOLD
 
 BASE_DIR = Path(__file__).resolve().parent
