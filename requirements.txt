@@ -25,3 +25,7 @@ openpyxl>=3.1,<4.0
 
 # Streamlit
 streamlit
+
+# Guardrails
+guardrails-ai
+guardrails-ai-detect-jailbreak

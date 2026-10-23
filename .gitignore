@@ -10,3 +10,11 @@ chroma_db/
 chromadb/
 
 code.zip
+
+llama-guard/
+
+data/
+
+sanitized_cache/
+
+test.py

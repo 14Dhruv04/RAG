@@ -1,5 +1,6 @@
-import hashlib
 import os
+import json
+import hashlib
 import shutil
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from agents.retriever_agent import RetrieverAgent
 from agents.main_agent import MainAgent
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+from guards.jailbreak_detection import input_check
+from guards.llama import LlamaGuard, MODEL_ID, THRESHOLD
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -25,10 +28,14 @@ st.set_page_config(
     layout="wide",
 )
 
-
 # -----------------------------------------------------------------------------
 # Configuration helpers
 # -----------------------------------------------------------------------------
+@st.cache_resource
+def get_llama_guard():
+    return LlamaGuard()
+
+llama_guard = get_llama_guard()
 
 def get_data_dir() -> Path:
     configured_dir = os.getenv("DATA_DIR")
@@ -75,40 +82,62 @@ def get_semantic_device() -> str:
 # Document loading
 # -----------------------------------------------------------------------------
 
+PARSERS = {
+    ".csv": CSVparser,
+    ".xlsx": Excelparser,
+    ".xls": Excelparser,
+    ".pdf": PDFparser,
+}
+
+def get_directory_signature(data_dir: str) -> tuple:
+    data_path = Path(data_dir)
+    files = []
+
+    for path in sorted(data_path.iterdir()):
+        if path.is_file() and path.suffix.lower() in PARSERS:
+            stat = path.stat()
+            files.append(
+                (path.name, stat.st_size, stat.st_mtime_ns)
+            )
+
+    return (tuple(files))
+
 @st.cache_data(show_spinner=False)
-def load_documents(data_dir: str):
+def load_documents(
+    data_dir: str,
+    directory_signature: tuple,
+) -> list[dict[str, Any]]:
     documents: list[dict[str, Any]] = []
     data_path = Path(data_dir)
 
     if not data_path.exists():
-        raise FileNotFoundError(f"Data directory does not exist: {data_path}")
+        raise FileNotFoundError(
+            f"Data directory does not exist: {data_path}"
+        )
 
     for file_path in sorted(data_path.iterdir()):
         if not file_path.is_file():
             continue
 
-        suffix = file_path.suffix.lower()
-
-        if suffix == ".csv":
-            parsed = CSVparser(str(file_path))
-        elif suffix in {".xlsx", ".xls"}:
-            parsed = Excelparser(str(file_path))
-        elif suffix == ".pdf":
-            parsed = PDFparser(str(file_path))
-        else:
+        parser = PARSERS.get(file_path.suffix.lower())
+        if parser is None:
             continue
+
+        # Parse the document without sanitization.
+        parsed = parser(str(file_path))
 
         for doc in parsed:
             enriched = dict(doc)
             enriched["source"] = file_path.name
-            enriched["source_type"] = suffix
+            enriched["source_type"] = file_path.suffix.lower()
             documents.append(enriched)
 
     if not documents:
-        raise ValueError(f"No supported documents found in {data_path}")
+        raise ValueError(
+            f"No supported documents found in {data_path}"
+        )
 
     return documents
-
 
 @st.cache_data(show_spinner=False)
 def build_semantic_documents(documents: list[dict[str, Any]], csv_rows_per_chunk: int = 75):
@@ -194,7 +223,8 @@ def initialize_rag(
             "GEMINI_API_KEY is not set. Add it to your environment or .env file."
         )
 
-    documents = load_documents(data_dir)
+    signature = get_directory_signature(data_dir)
+    documents = load_documents(data_dir, signature)
     semantic_documents = build_semantic_documents(
         documents,
         csv_rows_per_chunk=csv_rows_per_chunk,
@@ -212,8 +242,8 @@ def initialize_rag(
         device=semantic_device,
     )
 
-    bm25_tool = create_bm25_tool(bm25_retriever)
-    semantic_tool = create_semantic_tool(semantic_retriever)
+    bm25_tool = create_bm25_tool(bm25_retriever, llama_guard=llama_guard)
+    semantic_tool = create_semantic_tool(semantic_retriever, llama_guard=llama_guard)
 
     model = ChatGoogleGenerativeAI(
         model=model_name,
@@ -233,6 +263,124 @@ def initialize_rag(
         "semantic_device": semantic_device,
     }
 
+def save_uploaded_files(
+    uploaded_files: list[Any],
+    data_dir: Path,
+) -> tuple[list[str], list[str]]:
+    """Save supported uploads without overwriting existing files."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    saved: list[str] = []
+    skipped: list[str] = []
+
+    for uploaded_file in uploaded_files:
+        filename = uploaded_file.name.replace("\\", "/").rsplit("/", 1)[-1]
+
+        if not filename:
+            skipped.append("A file with an invalid filename was skipped.")
+            continue
+
+        suffix = Path(filename).suffix.lower()
+
+        if suffix not in PARSERS:
+            skipped.append(f"{filename}: unsupported file type.")
+            continue
+
+        content = uploaded_file.getvalue()
+
+        if not content:
+            skipped.append(f"{filename}: empty file.")
+            continue
+
+        stem = Path(filename).stem
+        candidate = data_dir / filename
+        counter = 0
+
+        # If the file exists with identical contents, skip it.
+        # If it differs, choose a new name rather than overwrite it.
+        while candidate.exists():
+            if candidate.is_file() and candidate.read_bytes() == content:
+                skipped.append(
+                    f"{filename}: identical file already exists as "
+                    f"{candidate.name}."
+                )
+                break
+
+            counter += 1
+            candidate = data_dir / f"{stem}_{counter}{suffix}"
+        else:
+            candidate.write_bytes(content)
+            saved.append(candidate.name)
+
+    return saved, skipped
+
+
+def clear_rag_caches() -> None:
+    """Force the next RAG initialization to use the updated corpus."""
+    load_documents.clear()
+    build_semantic_documents.clear()
+    semantic_index_id.clear()
+    initialize_rag.clear()
+
+
+def render_upload_controls(data_dir: Path) -> None:
+    """Render the document uploader in the Streamlit sidebar."""
+    with st.sidebar:
+        st.subheader("Upload documents")
+
+        upload_notice = st.session_state.pop("upload_notice", None)
+        if upload_notice:
+            st.success(upload_notice)
+
+        skipped_notice = st.session_state.pop("upload_skip_notice", None)
+        if skipped_notice:
+            st.info(skipped_notice)
+
+        with st.form("document_upload_form", clear_on_submit=True):
+            uploaded_files = st.file_uploader(
+                "Choose documents",
+                type=["pdf", "csv", "xlsx", "xls"],
+                accept_multiple_files=True,
+                help="Select one or more documents to add to your knowledge base.",
+            )
+
+            submitted = st.form_submit_button(
+                "Upload and rebuild index",
+                use_container_width=True,
+            )
+
+        if not submitted:
+            return
+
+        if not uploaded_files:
+            st.warning("Select at least one document first.")
+            return
+
+        try:
+            saved, skipped = save_uploaded_files(
+                uploaded_files=uploaded_files,
+                data_dir=data_dir,
+            )
+        except OSError as exc:
+            st.error(f"Could not save the uploaded documents: {exc}")
+            return
+
+        if saved:
+            st.session_state["upload_notice"] = (
+                f"Added {len(saved)} document(s): "
+                + ", ".join(saved)
+                + ". Rebuilding the RAG index."
+            )
+
+            if skipped:
+                st.session_state["upload_skip_notice"] = "\n".join(skipped)
+
+            clear_rag_caches()
+
+            st.rerun()
+
+        if skipped:
+            st.info("\n".join(skipped))
 
 def render_message(message: dict[str, Any], message_index: int = 0) -> None:
     with st.chat_message(message["role"]):
@@ -294,10 +442,31 @@ def main() -> None:
     st.caption("Ask questions about the documents available in the data directory.")
 
     data_dir = get_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
     chroma_dir = get_chroma_dir()
     model_name = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     csv_rows_per_chunk = int(os.getenv("SEMANTIC_CSV_ROWS_PER_CHUNK", "75"))
     semantic_device = get_semantic_device()
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    render_upload_controls(data_dir)
+
+    has_supported_documents = any(
+        path.is_file() and path.suffix.lower() in PARSERS
+        for path in data_dir.iterdir()
+    )
+
+    if not has_supported_documents:
+        for message_index, message in enumerate(st.session_state.messages):
+            render_message(message, message_index)
+
+        st.info(
+            "Upload at least one PDF, CSV, XLSX, or XLS document "
+            "using the sidebar to start chatting."
+        )
+        return
 
     try:
         rag = initialize_rag(
@@ -315,14 +484,32 @@ def main() -> None:
         )
         st.stop()
 
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
     for message_index, message in enumerate(st.session_state.messages):
         render_message(message, message_index)
 
     query = st.chat_input("Ask a question about your documents...")
     if not query:
+        return
+
+    if not input_check(query=query, llama_guard=llama_guard):
+        invalid_msg = "Invalid Request"
+
+        st.session_state.messages.append({
+            "role": "user",
+            "content": query,
+        })
+
+        with st.chat_message("user"):
+            st.markdown(query)
+
+        with st.chat_message("assistant"):
+            st.markdown(invalid_msg)
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": invalid_msg,
+        })
+
         return
 
     st.session_state.messages.append({
